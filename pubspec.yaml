@@ -1,0 +1,31 @@
+name: flutter_build_finder
+description: A command-line tool to find and manage Flutter build directories across your system. Easily locate and clean up build folders from Flutter projects.
+version: 0.0.1
+homepage: https://github.com/anjaneykumar7/flutter-build-finder
+repository: https://github.com/anjaneykumar7/flutter-build-finder
+issue_tracker: https://github.com/anjaneykumar7/flutter-build-finder/issues
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  ansicolor: ^2.0.1
+
+executables:
+  flutter_build_finder: flutter_build_finder
+
+platforms:
+  linux:
+  macos:
+  windows:
+
+topics:
+  - cli
+  - flutter
+  - utility
+  - cleanup
+  - build
+
+dev_dependencies:
+  lints: ^2.1.0
+  test: ^1.24.0
