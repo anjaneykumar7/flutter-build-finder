@@ -12,6 +12,8 @@ void main() {
 
   String homeDir = Platform.environment['HOME'] ?? '';
   List<Directory> buildDirs = [];
+  // Track seen build directory paths to avoid duplicates
+  final Set<String> seenBuildPaths = {};
 
   print('🔍 Scanning for Flutter build directories in: $homeDir');
 
@@ -38,6 +40,42 @@ void main() {
     return flutterPluginsFile.existsSync() || metadataFile.existsSync();
   }
 
+  // Check if the given directory is a Flutter project root
+  bool isFlutterProjectRoot(Directory dir) {
+    File pubspecFile = File('${dir.path}/pubspec.yaml');
+    if (pubspecFile.existsSync()) {
+      try {
+        String content = pubspecFile.readAsStringSync();
+        return content.contains('flutter:') || content.contains('sdk: flutter');
+      } catch (e) {
+        return false;
+      }
+    }
+    File flutterPluginsFile = File('${dir.path}/.flutter-plugins');
+    File metadataFile = File('${dir.path}/.metadata');
+    return flutterPluginsFile.existsSync() || metadataFile.existsSync();
+  }
+
+  // Add platform-specific build directories for a Flutter project root
+  void addPlatformBuildDirs(Directory projectRoot) {
+    List<String> candidates = [
+      '${projectRoot.path}/build',
+      '${projectRoot.path}/android/build',
+      '${projectRoot.path}/ios/build',
+      '${projectRoot.path}/web/build',
+    ];
+
+    for (final path in candidates) {
+      final d = Directory(path);
+      if (d.existsSync()) {
+        if (seenBuildPaths.add(d.path)) {
+          print(green('✅ Found Flutter build: ${d.path}'));
+          buildDirs.add(d);
+        }
+      }
+    }
+  }
+
   // Recursively scan directories safely
   void scanDirectory(Directory dir) {
     try {
@@ -53,13 +91,32 @@ void main() {
         return;
       }
 
+      // If current dir is a Flutter project root, gather known build dirs
+      if (isFlutterProjectRoot(dir)) {
+        addPlatformBuildDirs(dir);
+      }
+
       dir.listSync().forEach((entity) {
         if (entity is Directory) {
           if (entity.path.endsWith('/build')) {
             // Check if this is a Flutter project build directory
             if (isFlutterProject(entity)) {
-              print(green('✅ Found Flutter build: ${entity.path}'));
-              buildDirs.add(entity);
+              if (seenBuildPaths.add(entity.path)) {
+                print(green('✅ Found Flutter build: ${entity.path}'));
+                buildDirs.add(entity);
+                // Also attempt to add platform build dirs based on project root
+                Directory parentDir = Directory(entity.path).parent;
+                Directory projectRoot = parentDir;
+                // If pubspec not at parent, try grandparent
+                if (!File('${parentDir.path}/pubspec.yaml').existsSync() &&
+                    File('${parentDir.parent.path}/pubspec.yaml')
+                        .existsSync()) {
+                  projectRoot = parentDir.parent;
+                }
+                if (isFlutterProjectRoot(projectRoot)) {
+                  addPlatformBuildDirs(projectRoot);
+                }
+              }
             } else {
               // print(gray('⏩ Skipping non-Flutter build: ${entity.path}'));
             }
@@ -100,20 +157,52 @@ void main() {
     return;
   }
 
-  print(bold('🎯 Found ${buildDirs.length} Flutter build directories:\n'));
+  // Helper: find the Flutter project root for a given build directory
+  Directory? findProjectRootForBuildDir(Directory dir) {
+    Directory current = Directory(dir.path);
+    for (int i = 0; i < 5; i++) {
+      if (isFlutterProjectRoot(current)) {
+        return current;
+      }
+      current = current.parent;
+    }
+    return null;
+  }
+
+  // Group build directories by project root
+  final Map<String, List<Directory>> projectLocations = {};
+  final Map<String, String> projectNames = {};
+  for (var dir in buildDirs) {
+    final rootDir =
+        findProjectRootForBuildDir(dir) ?? Directory(dir.path).parent;
+    final rootPath = rootDir.path;
+    final projectName = rootPath.split(Platform.pathSeparator).last;
+    projectNames[rootPath] = projectName;
+    final list = projectLocations.putIfAbsent(rootPath, () => []);
+    if (!list.any((d) => d.path == dir.path)) {
+      list.add(dir);
+    }
+  }
+
+  print(bold(
+      '🎯 Found ${projectLocations.length} Flutter projects with build directories:\n'));
 
   int index = 1;
-  for (var dir in buildDirs) {
-    String projectName =
-        Directory(dir.path).parent.path.split(Platform.pathSeparator).last;
+  final List<String> projectRootsInOrder = projectLocations.keys.toList();
+  for (final root in projectRootsInOrder) {
+    final projectName =
+        projectNames[root] ?? root.split(Platform.pathSeparator).last;
     print(green('$index. 📱 $projectName'));
-    print(gray('   📍 Location: ${dir.path}\n'));
+    for (final loc in projectLocations[root]!) {
+      print(gray('   📍 Location: ${loc.path}'));
+    }
+    print('');
     index++;
   }
 
   // User interaction for deleting directories
   print(bold('⚙️  Options:'));
-  print('1️⃣  Delete specific build directory (enter the number)');
+  print('1️⃣  Delete specific build directory (select project then location)');
   print('2️⃣  Delete all build directories');
   print('3️⃣  Exit');
   stdout.write('🔹 Enter your choice (1-3): ');
@@ -121,16 +210,36 @@ void main() {
 
   switch (choice) {
     case '1':
-      stdout.write('🔢 Enter the number of the build directory to delete: ');
-      String? dirNumStr = stdin.readLineSync();
-      int? dirNum = int.tryParse(dirNumStr ?? '');
-      if (dirNum != null && dirNum > 0 && dirNum <= buildDirs.length) {
-        Directory dirToDelete = buildDirs[dirNum - 1];
-        print(yellow('🗑️  Deleting: ${dirToDelete.path}'));
-        dirToDelete.deleteSync(recursive: true);
-        print(green('✅ Successfully deleted: ${dirToDelete.path}'));
+      stdout.write('🔢 Enter the number of the project to manage: ');
+      String? projNumStr = stdin.readLineSync();
+      int? projNum = int.tryParse(projNumStr ?? '');
+      if (projNum != null &&
+          projNum > 0 &&
+          projNum <= projectRootsInOrder.length) {
+        final selectedRoot = projectRootsInOrder[projNum - 1];
+        final locations = projectLocations[selectedRoot] ?? [];
+        if (locations.isEmpty) {
+          print(red('❌ No build locations found for the selected project'));
+          break;
+        }
+        print(bold(
+            '📦 Locations for ${projectNames[selectedRoot] ?? selectedRoot}:'));
+        for (int i = 0; i < locations.length; i++) {
+          print(green('   ${i + 1}. ${locations[i].path}'));
+        }
+        stdout.write('🗑️  Enter the location number to delete: ');
+        String? locNumStr = stdin.readLineSync();
+        int? locNum = int.tryParse(locNumStr ?? '');
+        if (locNum != null && locNum > 0 && locNum <= locations.length) {
+          final dirToDelete = locations[locNum - 1];
+          print(yellow('🗑️  Deleting: ${dirToDelete.path}'));
+          dirToDelete.deleteSync(recursive: true);
+          print(green('✅ Successfully deleted: ${dirToDelete.path}'));
+        } else {
+          print(red('❌ Invalid location number selected'));
+        }
       } else {
-        print(red('❌ Invalid number selected'));
+        print(red('❌ Invalid project number selected'));
       }
       break;
     case '2':
@@ -139,9 +248,11 @@ void main() {
       stdout.write('❓ Are you sure? (y/N): ');
       String? confirm = stdin.readLineSync();
       if (confirm != null && confirm.toLowerCase() == 'y') {
-        for (var dir in buildDirs) {
-          print(yellow('🗑️  Deleting: ${dir.path}'));
-          dir.deleteSync(recursive: true);
+        for (final root in projectRootsInOrder) {
+          for (final dir in projectLocations[root]!) {
+            print(yellow('🗑️  Deleting: ${dir.path}'));
+            dir.deleteSync(recursive: true);
+          }
         }
         print(green('✅ All build directories deleted.'));
       } else {
