@@ -56,6 +56,34 @@ void main() {
     return flutterPluginsFile.existsSync() || metadataFile.existsSync();
   }
 
+  // Skip known non-project locations (plugin symlinks, SDK, integration_test, etc.)
+  bool isSkippedPath(String inputPath) {
+    final path = inputPath.replaceAll('\\', '/');
+    // iOS plugin symlinks
+    if (path.contains('/ios/.symlinks/plugins/')) return true;
+    // Generic symlinked plugins (covers macOS Flutter ephemeral symlinks)
+    if (path.contains('/.symlinks/plugins/')) return true;
+    // Generic plugin symlinks across desktop platforms
+    if (path.contains('/.plugin_symlinks/')) return true;
+    // Linux plugin symlinks (explicit)
+    if (path.contains('/linux/flutter/ephemeral/.plugin_symlinks/'))
+      return true;
+    // Windows plugin symlinks
+    if (path.contains('/windows/flutter/ephemeral/.plugin_symlinks/'))
+      return true;
+    // macOS plugin symlinks (Flutter dir can be capitalized)
+    if (path.contains('/macos/Flutter/ephemeral/.plugin_symlinks/'))
+      return true;
+    if (path.contains('/macos/flutter/ephemeral/.plugin_symlinks/'))
+      return true;
+    // FVM-managed Flutter SDK or version caches
+    if (path.contains('/.fvm/')) return true;
+    if (path.contains('/fvm/')) return true;
+    // Flutter SDK packages like integration_test
+    if (path.contains('/packages/integration_test/')) return true;
+    return false;
+  }
+
   // Add platform-specific build directories for a Flutter project root
   void addPlatformBuildDirs(Directory projectRoot) {
     List<String> candidates = [
@@ -79,6 +107,9 @@ void main() {
   // Recursively scan directories safely
   void scanDirectory(Directory dir) {
     try {
+      if (isSkippedPath(dir.path)) {
+        return;
+      }
       // Skip Xcode directories on macOS
       if (Platform.isMacOS && dir.path.contains('Library/Developer')) {
         // print(gray('⏩ Skipping Xcode directory: ${dir.path}'));
@@ -98,6 +129,9 @@ void main() {
 
       dir.listSync().forEach((entity) {
         if (entity is Directory) {
+          if (isSkippedPath(entity.path)) {
+            return;
+          }
           if (entity.path.endsWith('/build')) {
             // Check if this is a Flutter project build directory
             if (isFlutterProject(entity)) {
